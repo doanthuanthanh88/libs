@@ -1,0 +1,52 @@
+version: "3.7"
+services:
+  server-bee-uws:
+    image: server-bee-uws
+    build: .
+    container_name: server-bee-uws
+    ports: 
+      - 5113:6113  #- 9229:9229 --harmony-nullish
+    restart: unless-stopped
+    command: node --harmony-optional-chaining --max-old-space-size=256 bundle/index.js
+    network_mode: bridge
+    volumes: 
+      - ./dist/:/app/bundle/
+
+  # server-bull:
+  #   image: server-bull
+  #   build: .
+  #   container_name: server-bull
+  #   ports: 
+  #     - 5114:6113 # - 9229:9229
+  #   restart: unless-stopped
+  #   command: node --max-old-space-size=128 index.js
+  #   network_mode: bridge
+    # --expose-gc 
+
+  postgres:
+    image: postgres:alpine
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_PASSWORD: example
+    network_mode: bridge
+
+  adminer:
+    image: adminer
+    container_name: adminer
+    restart: unless-stopped
+    ports:
+      - 8080:8080
+    network_mode: bridge
+    depends_on: 
+      - postgres
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: unless-stopped
+    ports: 
+      - 6379:6379
+    network_mode: bridge

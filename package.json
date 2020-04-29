@@ -1,0 +1,41 @@
+{
+  "name": "libs",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "wp": "webpack",
+    "prod": "node .",
+    "dev": "nodemon --watch src --watch modules --ext .ts --exec 'node -r ts-node/register -r ./bin/tsconfig-paths-bootstrap.js --expose-gc --harmony --inspect src/index.ts | pino-pretty'",
+    "dev:worker": "nodemon --watch src --watch modules --ext .ts --exec 'node -r ts-node/register -r ./bin/tsconfig-paths-bootstrap.js --expose-gc --harmony --inspect src/worker.ts | pino-pretty'",
+    "http": "nodemon --watch src --ext .ts --exec 'node -r ts-node/register -r ./bin/tsconfig-paths-bootstrap.js src/server.ts'",
+    "build": "tsc && yarn build:resolve-module",
+    "build:resolve-module": "node bin/tsconfig",
+    "test-server": "k6 run -u 30 -d 15s ./k6/script.js",
+    "test": "node ./node_modules/api-testing-doc/bin/api-testing-doc test",
+    "lint": "tslint -c tslint.json 'src/**/*.ts'",
+    "retest": "yarn build && docker restart server-bee-uws && docker stats"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "optionalDevDependencies": {},
+  "optionalDependencies": {
+    "fast-json-stringify": "^1.20.1",
+    "fastest-validator": "^1.1.0",
+    "ioredis": "^4.16.1",
+    "pino": "^6.1.1",
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v17.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^13.1.6",
+    "@types/ioredis": "^4.14.9",
+    "@types/pino": "^5.17.0",
+    "nodemon": "^2.0.2",
+    "pino-pretty": "^4.0.0",
+    "ts-node": "^8.8.2",
+    "tsconfig-paths-webpack-plugin": "^3.2.0",
+    "typescript": "^3.8.3"
+  },
+  "dependencies": {}
+}

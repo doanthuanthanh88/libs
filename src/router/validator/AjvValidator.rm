@@ -1,0 +1,29 @@
+import { MethodOptions } from "@tiny-core/dist/router/method"
+import * as Ajv from 'ajv'
+import { Context } from "@tiny-core/dist/router/Context"
+import { badRequest } from "boom"
+import { IValidator } from "./IValidator"
+
+export class AjvValidator implements IValidator {
+  private validator
+  private num = 0
+
+  constructor(opts?: Ajv.Options) {
+    this.validator = new Ajv(opts)
+  }
+
+  prepare(opts: MethodOptions) {
+    for (const k in opts.validate) {
+      this.validator.addSchema(opts.validate[k], opts['schemaId'] = (this.num++).toString())
+    }
+  }
+
+  validate(opts: MethodOptions, ctx: Context) {
+    for (const k in opts.validate) {
+      const errors = this.validator.validate(opts['schemaId'], ctx[k])
+      if (errors !== true) {
+        throw badRequest(this.validator.errorsText(), ctx[k])
+      }
+    }
+  }
+}

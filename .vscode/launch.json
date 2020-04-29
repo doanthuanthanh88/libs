@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "attach",
+      "restart": true,
+      "name": "Attach Debug",
+      "port": 9229
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Dev",
+      "runtimeArgs": [
+        "-r",
+        "${workspaceRoot}/tsconfig-paths-bootstrap.js"
+      ],
+      "args": [
+        "${workspaceRoot}/src/index.ts"
+      ]
+    }
+  ]
+}

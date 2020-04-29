@@ -1,0 +1,30 @@
+import { createLogger, format, transports } from 'winston'
+
+const logger = (() => {
+  const _logger = createLogger({
+    // level: 'info', // config.logger.level,
+    format: format.combine(
+      format.timestamp(),
+      format.splat()
+    ),
+    // defaultMeta: { service: 'tracker' },
+    transports: [
+      new transports.Console()
+      // new winston.transports.File({ filename: 'error.log', level: 'error' }),
+      // new winston.transports.File({ filename: 'combined.log' })
+    ]
+  });
+
+  // if (process.env.NODE_ENV !== 'production') {
+  //   const debugFormat = require('winston-format-debug').default
+  //   _logger.add(new transports.Console({
+  //     format: format.combine(
+  //       debugFormat()
+  //     )
+  //   }))
+  // }
+
+  return _logger
+})()
+
+export default logger

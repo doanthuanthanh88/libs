@@ -1,2 +1,1 @@
-# libs
-Test utility libs
+# Core modules

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "module": "CommonJS",
+    "target": "ES2020",
+    "removeComments": true,
+    "sourceMap": true,
+    "typeRoots": [
+      "node_modules/@types",
+      "typings"
+    ],
+    "baseUrl": "src",
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "outDir": "dist"
+  },
+  "exclude": [
+    "node_modules",
+    "*.rm"
+  ]
+}
