@@ -24,10 +24,12 @@
     "fast-json-stringify": "^1.20.1",
     "fastest-validator": "^1.1.0",
     "ioredis": "^4.16.1",
+    "jsonwebtoken": "^8.5.1",
     "pino": "^6.1.1",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v17.0.0"
   },
   "devDependencies": {
+    "@types/jsonwebtoken": "^8.3.8",
     "@types/node": "^13.1.6",
     "@types/ioredis": "^4.14.9",
     "@types/pino": "^5.17.0",
