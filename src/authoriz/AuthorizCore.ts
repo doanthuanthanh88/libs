@@ -2,180 +2,130 @@ import * as Redis from 'ioredis'
 import { logger } from '../logger'
 
 export class AuthorizCore {
-  constructor(private redis: Redis.Redis, private projectName?: string) { }
+  constructor(private redis: Redis.Redis) { }
 
   // {
-  //   USER: {
-  //     oauth: ['SEND', 'ADD', 'SEARCH', 'THANH'],
-  //     mail: ['TEST', 'SEND']
-  //   },
-  //   MOD: {
-  //     $refs: ['USER'],
-  //     files: ['UPLOAD']
-  //   },
-  //   ADMIN: {
-  //     oauth: ['SEND']
+  //   'project1': {
+  //     "*": {
+  //       "*": ["*"]
+  //     },
+  //     "B": {
+  //       "user": [
+  //         "THANH"
+  //       ]
+  //     },
+  //     "ADMIN": {
+  //       "$refs": ["USER"],
+  //       "mail": [
+  //         "SEND_MAIL",
+  //         "GET_MAIL"
+  //       ],
+  //       "user": [
+  //         "UPDATE_ROLE",
+  //         "GET_ROLE",
+  //         "FIND_ACCOUNT",
+  //         "GET_ACCOUNT",
+  //         "CREATE_ACCOUNT",
+  //         "UPDATE_ACCOUNT",
+  //         "DELETE_ACCOUNT"
+  //       ]
+  //     },
+  //     "USER": {
+  //       "$refs": ["B"],
+  //       "user": [
+  //         "TEST"
+  //       ]
+  //     }
   //   }
   // }
 
-  async getAllRules(projectName = this.projectName) {
-    const rs = await this.redis.get(`raw@${projectName}`)
-    return rs ? JSON.parse(rs) : rs
+  async init(pj: any, pjName: string) {
+    const isExisted = await this.redis.exists(`${pjName}@raw`)
+    if (!isExisted) {
+      logger.debug(`Init authoriz core db for project "${pjName}"`)
+      await this.update(pj, pjName)
+    }
   }
 
-  async updateRules(roles: any, projectName = this.projectName) {
-    const keepActions = {} as { [key: string]: Set<string> }
-    const addActions = {} as { [key: string]: string[] }
-    const removeActions = {} as { [key: string]: string[] }
-    const addRules = {} as { [key: string]: string[] }
-    const removeRules = {} as { [key: string]: string[] }
-    const removeCount = {} as { [key: string]: number }
+  async getAllRules(pjName: string) {
+    const raw = await this.redis.get(`${pjName}@raw`)
+    return raw ? JSON.parse(raw) : undefined
+  }
 
-    const serviceNames = (await this.redis.keys(`actions@${projectName}:*`)).map(a => a.replace(`actions@${projectName}:`, ''))
-    for (const serviceName of serviceNames) {
-      removeActions[`${projectName}:${serviceName}`] = await this.redis.hkeys(`actions@${projectName}:${serviceName}`)
-      keepActions[`${projectName}:${serviceName}`] = new Set<string>()
-      removeCount[`${projectName}:${serviceName}`] = removeActions[`${projectName}:${serviceName}`].length
+  async update(pj: any, pjName: string) {
+    logger.debug(`Authorize: Update project data ${pjName}`, pj)
+
+    // Clear old data
+    const isRemoveAll = Object.keys(pj).length === 0
+    let removeKeys: string[]
+    if (isRemoveAll) {
+      removeKeys = await this.redis.keys(`${pjName}@*`)
+    } else {
+      removeKeys = await this.redis.keys(`${pjName}@role/*`)
     }
-
-    const roleNames = (await this.redis.keys(`rules@${projectName}:*`)).map(r => r.replace(`rules@${projectName}:`, ''))
-    for (const roleName of roleNames) {
-      removeRules[`${projectName}:${roleName}`] = await this.redis.smembers(`rules@${projectName}:${roleName}`)
+    if (removeKeys.length > 0) {
+      await this.redis.del(...removeKeys)
     }
+    if (isRemoveAll) return
 
-    for (const roleName in roles) {
-      const rules = roles[roleName]
-
-      if (!removeRules[`${projectName}:${roleName}`]) removeRules[`${projectName}:${roleName}`] = []
-      if (!addRules[`${projectName}:${roleName}`]) addRules[`${projectName}:${roleName}`] = []
-
-      for (const serviceName in rules) {
-        if (serviceName !== '$refs') {
-          const actions = rules[serviceName] as string[]
-
-          if (!removeActions[`${projectName}:${serviceName}`]) removeActions[`${projectName}:${serviceName}`] = []
-          if (!keepActions[`${projectName}:${serviceName}`]) keepActions[`${projectName}:${serviceName}`] = new Set<string>()
-          if (!addActions[`${projectName}:${serviceName}`]) addActions[`${projectName}:${serviceName}`] = []
-
-          if (!removeRules[`${projectName}:${roleName}`].includes(serviceName)) {
-            addRules[`${projectName}:${roleName}`].push(serviceName)
-          } else {
-            removeRules[`${projectName}:${roleName}`].splice(removeRules[`${projectName}:${roleName}`].indexOf(serviceName), 1)
-          }
-
+    const keys = {} as any
+    const refs = [] as { name: string, refs: string[], pathName: string }[]
+    const pathNameRefresh = new Set<string>()
+    for (const roleName in pj) {
+      const role = pj[roleName]
+      for (const pathName in role) {
+        if (pathName !== '$refs') {
+          if (!keys[pathName]) keys[pathName] = await this.redis.hgetall(`${pjName}@path/${pathName}/keys`)
+          const actions = role[pathName]
           for (const action of actions) {
-            keepActions[`${projectName}:${serviceName}`].add(action)
-            if (!removeActions[`${projectName}:${serviceName}`].includes(action)) {
-              addActions[`${projectName}:${serviceName}`].push(action)
-            } else {
-              removeActions[`${projectName}:${serviceName}`].splice(removeActions[`${projectName}:${serviceName}`].indexOf(action), 1)
+            if (!keys[pathName][action]) {
+              pathNameRefresh.add(pathName)
+
+              keys[pathName][action] = action === '*' ? action : await this.redis.incr(`${pjName}@id`)
+              // keys[pathName][action] = action
             }
+            await this.redis.sadd(`${pjName}@role/${roleName}/keys`, keys[pathName][action])
+            await this.redis.sadd(`${pjName}@role/${roleName}/path/${pathName}/keys`, keys[pathName][action])
           }
-        } else {
-          const roleRefers = rules[serviceName]
-          for (const serviceName of roleRefers) {
-            if (!removeRules[`${projectName}:${roleName}`].includes(`$${serviceName}`)) {
-              addRules[`${projectName}:${roleName}`].push(`$${serviceName}`)
-            } else {
-              removeRules[`${projectName}:${roleName}`].splice(removeRules[`${projectName}:${roleName}`].indexOf(`$${serviceName}`), 1)
-            }
-          }
+        } else if (role[pathName].length > 0) {
+          refs.push({ name: roleName, refs: role[pathName], pathName })
         }
       }
     }
-
-    // Handle add and remove action
-    for (let k in removeActions) {
-      removeActions[k] = removeActions[k].filter(a => !keepActions[k].has(a))
+    while (refs.length > 0) {
+      const ref = refs.shift()
+      if (refs.find(e => ref.refs.includes(e.name))) {
+        refs.push(ref)
+        continue
+      }
+      await this.redis.sunionstore(`${pjName}@role/${ref.name}/path/${ref.pathName}/keys`, `${pjName}@role/${ref.name}/path/${ref.pathName}/keys`, ...ref.refs.map(roleName => `${pjName}@role/${roleName}/path/${ref.pathName}/keys`))
+      await this.redis.sunionstore(`${pjName}@role/${ref.name}/keys`, `${pjName}@role/${ref.name}/keys`, ...ref.refs.map(roleName => `${pjName}@role/${roleName}/keys`))
     }
 
-    const serviceChanges = new Set<string>()
-
-    await Promise.all([
-      ...Object.keys(addActions).map(async (key) => {
-        const obj = {} as any
-        for (const action of addActions[key]) {
-          obj[action] = await this.redis.incr(`count@${key}`)
-        }
-        if (Object.keys(obj).length > 0) {
-          logger.debug({
-            key,
-            actions: addActions[key]
-          }, 'addActions')
-          await this.redis.hmset(`actions@${key}`, obj)
-          serviceChanges.add(key)
-        }
-      }),
-      ...Object.keys(removeActions).map(async (key) => {
-        const actions = removeActions[key]
-        if (actions.length > 0) {
-          logger.debug({
-            key,
-            actions: removeActions[key]
-          }, 'removeActions')
-          await this.redis.hdel(`actions@${key}`, ...actions)
-          if (removeCount[`${key}`] && removeCount[`${key}`] === actions.length) {
-            await this.redis.del(`count@${key}`)
-          }
-          serviceChanges.add(key)
-        }
-      }),
-      ...Object.keys(addRules).filter(key => addRules[key].length > 0).map(async (key) => {
-        logger.debug({
-          key,
-          actions: addRules[key]
-        }, 'addRules')
-        await this.redis.sadd(`rules@${key}`, ...addRules[key])
-      }),
-      ...Object.keys(removeRules).filter(key => removeRules[key].length > 0).map(async (key) => {
-        logger.debug({
-          key,
-          actions: removeRules[key]
-        }, 'removeRules')
-        await this.redis.srem(`rules@${key}`, ...removeRules[key])
-      })
-    ])
-
-    await this.redis.set(`raw@${projectName}`, JSON.stringify(roles))
-
-    if (serviceChanges.size > 0) {
-      [...serviceChanges].forEach(serviceName => {
-        logger.debug(`Authorize: Please reload "${serviceName}"`)
-        this.redis.publish(`@reload::${projectName}`, serviceName)
-      })
+    for (const pathName of pathNameRefresh.values()) {
+      logger.debug(`Authorize: Please reload "${pathName}"`)
+      this.redis.publish(`authoriz@update`, `${pj}:${pathName}`)
     }
 
+    await this.redis.set(`${pjName}@raw`, JSON.stringify(pj))
   }
 
-  getKeyOfDomainService(serviceName: string, projectName = this.projectName) {
-    return `${projectName}:${serviceName}`
-  }
-
-  async getRulesByRoles(roles: string[], projectName = this.projectName) {
-    let rules = await this._getRules(roles, projectName)
-
-    const actionArrIds = await Promise.all(rules.map(serviceName => this.redis.hvals(`actions@${projectName}:${serviceName}`)))
-    const actionIds = actionArrIds.reduce((sum, ids, i) => {
-      sum[rules[i]] = ids.map(id => +id)
+  async getUserActionIDs(roles: string[], pjName: string) {
+    const pathOfRoles = await Promise.all(roles.map(roleName => this.redis.keys(`${pjName}@role/${roleName}/path/*/keys`)))
+    const pathKeys = Array.from(new Set(pathOfRoles.flat().map(e => e.replace(/[^@]+@role\/[^\/]+\/path\/([^\/]+)\/keys/, '$1'))))
+    const pathIDs = await Promise.all(pathKeys.map(pathName => this.redis.sunion(...roles.map(role => `${pjName}@role/${role}/path/${pathName}/keys`))))
+    return pathKeys.reduce((sum, k, i) => {
+      sum[k] = (pathIDs[i] || []).map(e => e === '*' ? '*' : +e)
       return sum
     }, {})
-
-    return actionIds
   }
 
-  async getActionsByServiceName(serviceName: string, projectName = this.projectName) {
-    const actions = await this.redis.hgetall(`actions@${projectName}:${serviceName}`)
-    const rs = {} as { [action: string]: number }
-    Object.keys(actions).forEach(k => rs[k] = +actions[k])
-    return rs
-  }
-
-  private async _getRules(roles: string[], projectName: string) {
-    let rules = await this.redis.sunion(...roles.map(role => `rules@${projectName}:${role}`))
-    const roleRefers = rules.filter(r => r[0] === '$').map(r => r.substr(1))
-    if (roleRefers.length > 0) {
-      rules = rules.filter(r => r[0] !== '$').concat(await this._getRules(roleRefers, projectName))
+  async getServiceActionsIDs(pathName: string, pjName: string) {
+    const map = await this.redis.hgetall(`${pjName}@path/${pathName}/keys`) as { [action: string]: number | string }
+    for (const k in map) {
+      map[k] = map[k] === '*' ? '*' : +map[k]
     }
-    return rules as string[]
+    return map as { [action: string]: number | '*' }
   }
+
 }

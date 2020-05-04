@@ -1,5 +1,4 @@
-import { HttpError } from "@/error/HttpError"
-import { HttpResponse, HttpRequest } from "uWebSockets.js"
+import { HttpResponse } from "uWebSockets.js"
 
 export interface Context<B = any> extends HttpResponse {
   // req: HttpRequest

@@ -1,41 +1,51 @@
 import * as Redis from 'ioredis'
 import { sign, verify, TokenExpiredError, SignOptions } from 'jsonwebtoken'
-import { unauthorized, forbidden } from '../error/HttpError'
+import { unauthorized, forbidden, internal } from '../error/HttpError'
 import { AuthorizCore } from "./AuthorizCore"
 import { logger } from "../logger"
 
 export class Authoriz {
-  private actions: { [action: string]: number }
-  private authorizCore: AuthorizCore
+  private actions: { [action: string]: number | '*' }
   private redisSync: Redis.Redis
   private redis: Redis.Redis
+  private callbackAfterReloadRole: Function
   public jwtPrivateKey: string
+  public authorizCore: AuthorizCore
 
   constructor(redisOpts: Redis.RedisOptions, private projectName: string, private serviceName: string) {
     this.redis = new Redis(redisOpts)
-    this.authorizCore = new AuthorizCore(this.redis, this.projectName)
+    this.authorizCore = new AuthorizCore(this.redis)
     this.redisSync = this.redis.duplicate()
   }
 
-  async init() {
+  async init(pj?: any, pjName?: string) {
+    if (pj && pjName) await this.authorizCore.init(pj, pjName)
+
     await this.reload()
-    logger.debug(`Listened to reload @reload::${this.projectName}`)
-    await this.redisSync.subscribe(`@reload::${this.projectName}`)
+    logger.debug(`Listened to reload @reload::${this.projectName}:${this.serviceName}`)
+    await this.redisSync.subscribe(`authoriz@update`)
     this.redisSync.on('message', async (_, projectDomainService) => {
-      const key = this.authorizCore.getKeyOfDomainService(this.serviceName)
-      if (projectDomainService === key) {
-        logger.debug(`Authorize: Service "${this.serviceName}" is reloading "${key}"`)
+      if (`${this.projectName}:${this.serviceName}` === projectDomainService) {
+        logger.debug(`Authorize: Service "${this.serviceName}" is reloading "${projectDomainService}"`)
         await this.reload()
+        if (this.callbackAfterReloadRole) {
+          logger.debug(`Authorize: Service "${this.serviceName}" is reloading action in "${projectDomainService}"`)
+          await this.callbackAfterReloadRole()
+        }
       }
     })
   }
 
+  public onAfterReloadRoles(callbackAfterReloadRole: Function) {
+    this.callbackAfterReloadRole = callbackAfterReloadRole
+  }
+
   private async reload() {
-    this.actions = await this.authorizCore.getActionsByServiceName(this.serviceName)
+    this.actions = await this.authorizCore.getServiceActionsIDs(this.serviceName, this.projectName)
   }
 
   async dispose() {
-    await this.redisSync.unsubscribe(`@reload::${this.projectName}`)
+    await this.redisSync.unsubscribe(`authoriz@update`)
 
     this.redis.disconnect()
     this.redisSync.disconnect()
@@ -44,24 +54,27 @@ export class Authoriz {
   checkAuthorizByActionID(token: string, actionID: number) {
     const tokenObject = this.extractToken(token)
     if (tokenObject.rules[this.serviceName]?.includes(actionID)) return tokenObject
+    if (tokenObject.rules['*']?.includes(actionID) || tokenObject.rules['*']?.includes('*')) return tokenObject
     throw forbidden(['Unauthorized', 'UNAUTHORIZED'])
   }
 
-  checkAuthorizByActionName(token: string, actionName: string) {
-    const tokenObject = this.extractToken(token)
-    if (tokenObject.rules[this.serviceName]?.includes(this.actions[actionName])) return tokenObject
-    throw forbidden(['Unauthorized', 'UNAUTHORIZED'])
+  refreshToken(token: string) {
+    const rs = this.extractToken(token)
+    const { iat, exp, nbf, jti, aud, iss, opts, ...data } = rs
+    return this.generateToken(data, JSON.parse(opts))
   }
 
-  async createTokenByRoles(roles: string[], metaData = {} as any) {
-    const rules = await this.authorizCore.getRulesByRoles(roles)
+  async createTokenByRoles(roles: string[], metaData = {} as any, opts = {} as SignOptions) {
+    const rules = await this.authorizCore.getUserActionIDs(roles, this.projectName)
+    if (roles.length > 0 && Object.keys(rules).length === 0) throw internal(['Could not get rule from role', 'NOT_FOUND_RULE_IN_ROLE'], { roles })
     const token = this.generateToken(Object.assign({}, metaData, {
       rules
-    }))
+    }), opts)
     return token
   }
 
   private generateToken(data: any, opts = {} as SignOptions) {
+    data.opts = JSON.stringify(opts)
     const token = sign(data, this.jwtPrivateKey, opts)
 
     return { token, expiresIn: opts.expiresIn }

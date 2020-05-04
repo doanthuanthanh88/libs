@@ -1,6 +1,6 @@
-import { HttpResponse } from "uWebSockets.js"
+import { Context } from "libs/router/Context"
 
-export function jsonParser(res: HttpResponse) {
+export function jsonParser(res: Context) {
   return new Promise<any>((s, e) => {
     let str = ''
     res.onData((ab, isLast) => {

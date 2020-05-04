@@ -1,23 +1,13 @@
 import { HttpRequest, HttpResponse } from "uWebSockets.js"
-import { Context } from "@/router/Context"
+import { Context } from "./Context"
 import { jsonParser } from "./bodyparser"
 import { logger } from '../logger'
-import { MethodOptions, Method } from "./method"
-import { toHttpError, isHttpServerError, HttpError } from "@/error/HttpError"
-import { IResponsor } from "./responsor/IResponsor"
-import { IValidator } from "./validator/IValidator"
 import { parse } from 'querystring'
-import { gzipSync, ZlibOptions } from 'zlib'
+import { toHttpError, isHttpServerError } from "../error/HttpError"
 
 export type RouterHandle = (ctx: Context, req: HttpRequest) => any | Promise<any>
-export type RawHandle = (res: HttpResponse, req: HttpRequest) => any | Promise<any>
-export type GZip = ZlibOptions & { threshold: number }
-export enum BodyParser {
-  JSON = 1
-}
 
-export async function loadRouter(app: any, routerIndex: { gzip?: GZip, rootPath?: string, routers: any[], cors?: boolean, validator?: IValidator, responsor?: IResponsor }) {
-  const { validator, responsor, rootPath, gzip, cors, routers } = routerIndex
+export async function loadRouter(app: any, routerIndex: { rootPath?: string, routers: any[], middlewares?: RouterHandle[] }) {
 
   const defaultString = {
     status: ['200', '204'],
@@ -39,110 +29,101 @@ export async function loadRouter(app: any, routerIndex: { gzip?: GZip, rootPath?
     }
   }
 
-  const handleParams = (req: HttpRequest, params: string[]) => {
-    const obj = {}
-    for (const [i, name] of params.entries()) {
-      obj[name] = req.getParameter(i)
-    }
-    return obj
-  }
-
   const METHOD = {} as Method
 
-  for (const method of ['GET', 'HEAD', 'DEL', 'ANY', 'POST', 'PUT', 'PATCH', 'OPTIONS']) {
-    METHOD[method] = (path: string, opts = {} as MethodOptions, routerHandle?: RouterHandle) => {
-      if (rootPath) path = `${rootPath}${path === '/' ? '' : path}`
-      if (!routerHandle) {
-        routerHandle = opts as RouterHandle
-        opts = {}
-      } else {
-        if (!validator) opts.validateSchema = undefined
-        else if (opts.validateSchema) validator.prepare(opts)
-
-        if (!responsor) opts.responsorSchema = undefined
-        else if (opts.responsorSchema) responsor.prepare(opts)
+  function responseData(ctx: Context) {
+    if (!ctx.error) {
+      if (ctx.data !== undefined) {
+        ctx.writeStatus(defaultString.status[0])
+        if (typeof ctx.data === 'object') {
+          ctx.headers[defaultString.bodyHeader[0]] = defaultString.bodyHeader[1]
+          ctx.data = JSON.stringify(ctx.data)
+        } else {
+          ctx.headers[defaultString.bodyHeader[0]] = defaultString.bodyHeader[2]
+          ctx.data = ctx.data.toString()
+        }
+        writeHeaders(ctx, ctx.headers)
+        ctx.end(ctx.data)
+        return
       }
+      ctx.writeStatus(defaultString.status[1])
+      writeHeaders(ctx, ctx.headers)
+      ctx.end()
+      return
+    }
+    ctx.writeStatus(`${ctx.error.statusCode.toString()} ${ctx.error.statusMessage || ''}`)
+    writeHeaders(ctx, ctx.headers)
+    if (!isHttpServerError(ctx.error)) {
+      ctx.end(ctx.error.message)
+      return
+    }
+    ctx.end()
+    logger.error({
+      ...ctx.error,
+      stack: ctx.error.stack,
+    }, ctx.error.message)
+  }
 
-      const { query, params, bodyParser, validateSchema, responsorSchema } = opts
-      const threshold = gzip?.threshold
+  for (const method of ['GET    ', 'HEAD   ', 'DEL    ', 'ANY    ', 'POST   ', 'PUT    ', 'PATCH  ', 'OPTIONS']) {
+    METHOD[method.trim()] = (path: string, ...routerHandles: RouterHandle[]) => {
+      if (routerIndex.rootPath) path = `${routerIndex.rootPath}${path === '/' ? '' : path}`
 
-      if (opts.prepare) opts.prepare()
+      logger.debug(` |-- %s %s`, method, path)
 
-      logger.debug(` |-- %s\t%s`, method, path)
-      app[method.toLowerCase()](path, async (ctx: Context, req: HttpRequest) => {
+      if (routerIndex.middlewares) routerIndex.middlewares = routerHandles.concat(routerIndex.middlewares)
+      const len = routerHandles.length
+      if (len === 0) routerHandles.push(() => { })
+
+      app[method.trim().toLowerCase()](path, async (ctx: Context, req: HttpRequest) => {
         ctx.onAborted(() => { ctx.aborted = true })
-
+        ctx.headers = {}
         try {
-          if (opts.rawHandler) await opts.rawHandler(ctx, req)
-
-          ctx.headers = !cors ? {} : defaultString.cors
-          if (query) ctx.query = parse(req.getQuery())
-          if (params) ctx.params = handleParams(req, params)
-
-          if (bodyParser === BodyParser.JSON) ctx.body = await jsonParser(ctx)
-
-          if (validateSchema) validator.validate(validateSchema, ctx)
-
-          ctx.data = await routerHandle(ctx, req)
-
+          let i = 0
+          let proms
+          do {
+            proms = routerHandles[i](ctx, req)
+            if (proms instanceof Promise) await proms
+          } while (++i < len)
         } catch (err) {
           ctx.error = toHttpError(err)
         }
 
         if (!ctx.aborted) {
-          ctx.cork(() => {
-            if (!ctx.error) {
-              if (ctx.data !== undefined) {
-                ctx.writeStatus(defaultString.status[0])
-                if (typeof ctx.data === 'object') {
-                  ctx.headers[defaultString.bodyHeader[0]] = defaultString.bodyHeader[1]
-                  ctx.data = !responsorSchema ? JSON.stringify(ctx.data) : responsor.serialize(responsorSchema, ctx.data)
-                } else {
-                  ctx.headers[defaultString.bodyHeader[0]] = defaultString.bodyHeader[2]
-                  ctx.data = ctx.data.toString()
-                }
-                if (!threshold || Buffer.byteLength(ctx.data) < threshold) {
-                  writeHeaders(ctx, ctx.headers)
-                  ctx.end(ctx.data)
-                  return
-                }
-                ctx.headers[defaultString.bodyHeader[6]] = defaultString.bodyHeader[7]
-                ctx.headers[defaultString.bodyHeader[3]] = defaultString.bodyHeader[4]
-                writeHeaders(ctx, ctx.headers)
-                ctx.end(gzipSync(ctx.data, gzip))
-                return
-              }
-              ctx.writeStatus(defaultString.status[1])
-              writeHeaders(ctx, ctx.headers)
-              ctx.end()
-              return
-            }
-            ctx.writeStatus(`${ctx.error.statusCode.toString()} ${ctx.error.statusMessage || ''}`)
-            writeHeaders(ctx, ctx.headers)
-            if (!isHttpServerError(ctx.error)) {
-              ctx.end(ctx.error.message)
-              return
-            }
-            ctx.end()
-            logger.error({
-              ...ctx.error,
-              stack: ctx.error.stack,
-            }, ctx.error.message)
-          })
+          ctx.cork(() => responseData(ctx))
         }
       })
     }
   }
 
-  if (cors) {
-    logger.debug('(*) Enabled CORs')
-    // tslint:disable-next-line: no-empty
-    METHOD.OPTIONS('/*', () => { })
-  }
-
-  if (gzip) logger.debug('(*) Enabled GZip')
-
   logger.debug('(*) Routers')
-  routers.forEach(r => r.default(METHOD))
+  routerIndex.routers.forEach(r => r.default(METHOD))
 
+}
+
+export function handle(opts = {} as { params?: string[], query?: boolean, body?: BodyParser }) {
+  return async (ctx: Context, req: HttpRequest) => {
+    if (opts.params) {
+      ctx.params = {}
+      for (const [i, name] of opts.params.entries()) {
+        ctx.params[name] = req.getParameter(i)
+      }
+    }
+    if (opts.query) ctx.query = parse(req.getQuery())
+    if (opts.body === BodyParser.JSON) ctx.body = await jsonParser(ctx)
+  }
+}
+
+export enum BodyParser {
+  JSON = 1
+}
+
+export type Method = {
+  GET(path: string, ...routerHandles: RouterHandle[]): void | Promise<void>
+  HEAD(path: string, ...routerHandles: RouterHandle[]): void | Promise<void>
+  DEL(path: string, ...routerHandles: RouterHandle[]): void | Promise<void>
+  ANY(path: string, ...routerHandles: RouterHandle[]): void | Promise<void>
+  POST(path: string, ...routerHandles: RouterHandle[]): void | Promise<void>
+  PUT(path: string, ...routerHandles: RouterHandle[]): void | Promise<void>
+  PATCH(path: string, ...routerHandles: RouterHandle[]): void | Promise<void>
+  OPTIONS(path: string, ...routerHandles: RouterHandle[]): void | Promise<void>
 }
