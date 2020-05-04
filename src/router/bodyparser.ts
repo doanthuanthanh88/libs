@@ -1,4 +1,4 @@
-import { Context } from "libs/router/Context"
+import { Context } from "./Context"
 
 export function jsonParser(res: Context) {
   return new Promise<any>((s, e) => {
